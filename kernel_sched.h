@@ -91,6 +91,9 @@ enum SCHED_CAUSE {
 	SCHED_USER /**< @brief User-space code called yield */
 };
 
+/* define ptcb */
+struct ptcb* ptcb; 
+
 /**
   @brief The thread control block
 
@@ -100,6 +103,8 @@ enum SCHED_CAUSE {
 typedef struct thread_control_block {
 
 	PCB* owner_pcb; /**< @brief This is null for a free TCB */
+
+	struct ptcb* ptcb /*--pointer to PTCB of this thread--*/
 
 	cpu_context_t context; /**< @brief The thread context */
 	Thread_type type; /**< @brief The type of thread */
