@@ -52,6 +52,8 @@ typedef struct process_control_block {
   rlnode children_node;   /**< @brief Intrusive node for @c children_list */
   rlnode exited_node;     /**< @brief Intrusive node for @c exited_list */
 
+  rlnode threads_list;    /*list of all threads(PTCB's) of this task*/
+
   CondVar child_exit;     /**< @brief Condition variable for @c WaitChild. 
 
                              This condition variable is  broadcast each time a child
