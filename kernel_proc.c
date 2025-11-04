@@ -43,8 +43,14 @@ static inline void initialize_PCB(PCB* pcb)
   rlnode_init(& pcb->exited_list, NULL);
   rlnode_init(& pcb->children_node, pcb);
   rlnode_init(& pcb->exited_node, pcb);
+<<<<<<< HEAD
   rlnode_init(& pcb->ptcb_list, pcb);     // Added
   pcb->thread_count = 0;                  // Added
+=======
+
+  rlnode_init(& pcb->ptcb_list, pcb); /*--initialize threads_list with pcb--*/
+  pcb->thread_count = 0;               //added 
+>>>>>>> be861c059cf012a0e6a7ba140b44aeda0ecfcaff
   pcb->child_exit = COND_INIT;
 }
 
