@@ -43,6 +43,8 @@ static inline void initialize_PCB(PCB* pcb)
   rlnode_init(& pcb->exited_list, NULL);
   rlnode_init(& pcb->children_node, pcb);
   rlnode_init(& pcb->exited_node, pcb);
+  rlnode_init(& pcb->ptcb_list, pcb);     // Added
+  pcb->thread_count = 0;                  // Added
   pcb->child_exit = COND_INIT;
 }
 
@@ -178,8 +180,35 @@ Pid_t sys_Exec(Task call, int argl, void* args)
     the initialization of the PCB.
    */
   if(call != NULL) {
-    newproc->main_thread = spawn_thread(newproc, start_main_thread);
-    wakeup(newproc->main_thread);
+    
+      // --- Δημιουργία του PTCB για το main thread ---
+      PTCB* ptcb = malloc(sizeof(PTCB));
+      memset(ptcb, 0, sizeof(*ptcb));
+
+      ptcb->task = call;       // η main συνάρτηση του προγράμματος
+      ptcb->argl = argl;       // παράμετροι του main
+      ptcb->args = args;
+      ptcb->exitval = 0;
+      ptcb->exited = 0;
+      ptcb->detached = 0;
+      ptcb->refcount = 1;
+      cond_init(&ptcb->exit_cv);
+      rlnode_init(&ptcb->ptcb_list_node, ptcb);
+
+      // --- Δημιουργία του TCB για το main thread ---
+      newproc->main_thread = spawn_thread(newproc, start_main_thread);
+
+      // --- Σύνδεση PTCB και TCB ---
+      ptcb->tcb = newproc->main_thread;
+      newproc->main_thread->ptcb = ptcb;
+
+      // --- Σύνδεση PTCB με PCB ---
+      rlist_push_back(&newproc->ptcb_list, &ptcb->ptcb_list_node);
+      newproc->thread_count = 1;
+
+      // --- Ξεκίνημα του thread ---
+      wakeup(newproc->main_thread);
+     
   }
 
 
@@ -288,75 +317,73 @@ Pid_t sys_WaitChild(Pid_t cpid, int* status)
 void sys_Exit(int exitval)
 {
 
-  PCB *curproc = CURPROC;  /* cache for efficiency */
 
-  /* First, store the exit status */
-  curproc->exitval = exitval;
+    PCB* curproc = CURPROC;  // cache for efficiency
 
-  /* 
-    Here, we must check that we are not the init task. 
-    If we are, we must wait until all child processes exit. 
-   */
-  if(get_pid(curproc)==1) {
+    // 1️⃣ Αποθήκευση της τιμής εξόδου
+    curproc->exitval = exitval;
 
-    while(sys_WaitChild(NOPROC,NULL)!=NOPROC);
+    // 2️⃣ Αν είμαι το init process (PID = 1), περίμενε να τελειώσουν όλα τα παιδιά
+    if (get_pid(curproc) == 1) {
 
-  } else {
+        while (sys_WaitChild(NOPROC, NULL) != NOPROC);
 
-    /* Reparent any children of the exiting process to the 
-       initial task */
-    PCB* initpcb = get_pcb(1);
-    while(!is_rlist_empty(& curproc->children_list)) {
-      rlnode* child = rlist_pop_front(& curproc->children_list);
-      child->pcb->parent = initpcb;
-      rlist_push_front(& initpcb->children_list, child);
+    } else {
+
+        // 3️⃣ Reparent τυχόν ενεργά παιδιά στο init process
+        PCB* initpcb = get_pcb(1);
+        while (!is_rlist_empty(&curproc->children_list)) {
+            rlnode* child = rlist_pop_front(&curproc->children_list);
+            child->pcb->parent = initpcb;
+            rlist_push_front(&initpcb->children_list, child);
+        }
+
+        // 4️⃣ Μεταφορά exited παιδιών στη λίστα του init και ειδοποίηση
+        if (!is_rlist_empty(&curproc->exited_list)) {
+            rlist_append(&initpcb->exited_list, &curproc->exited_list);
+            kernel_broadcast(&initpcb->child_exit);
+        }
+
+        // 5️⃣ Δήλωσε στον parent ότι το process μου πέθανε
+        rlist_push_front(&curproc->parent->exited_list, &curproc->exited_node);
+        kernel_broadcast(&curproc->parent->child_exit);
     }
 
-    /* Add exited children to the initial task's exited list 
-       and signal the initial task */
-    if(!is_rlist_empty(& curproc->exited_list)) {
-      rlist_append(& initpcb->exited_list, &curproc->exited_list);
-      kernel_broadcast(& initpcb->child_exit);
+    #ifdef DEBUG
+    assert(is_rlist_empty(&curproc->children_list));
+    assert(is_rlist_empty(&curproc->exited_list));
+    #endif
+
+    // 6️⃣ Κλείσε όλα τα αρχεία του process
+    for (int i = 0; i < MAX_FILEID; i++) {
+        if (curproc->FIDT[i] != NULL) {
+            FCB_decref(curproc->FIDT[i]);
+            curproc->FIDT[i] = NULL;
+        }
     }
 
-    /* Put me into my parent's exited list */
-    rlist_push_front(& curproc->parent->exited_list, &curproc->exited_node);
-    kernel_broadcast(& curproc->parent->child_exit);
-
-  }
-
-  assert(is_rlist_empty(& curproc->children_list));
-  assert(is_rlist_empty(& curproc->exited_list));
-
-
-  /* 
-    Do all the other cleanup we want here, close files etc. 
-   */
-
-  /* Release the args data */
-  if(curproc->args) {
-    free(curproc->args);
-    curproc->args = NULL;
-  }
-
-  /* Clean up FIDT */
-  for(int i=0;i<MAX_FILEID;i++) {
-    if(curproc->FIDT[i] != NULL) {
-      FCB_decref(curproc->FIDT[i]);
-      curproc->FIDT[i] = NULL;
+    // 7️⃣ Ελευθέρωσε τα arguments του process (κρατάμε την if ✅)
+    if (curproc->args) {
+        free(curproc->args);
+        curproc->args = NULL;
     }
-  }
 
-  /* Disconnect my main_thread */
-  curproc->main_thread = NULL;
+    // 8️⃣ Καθάρισε όλα τα threads (PTCBs) που είχε το process
+    while (!is_rlist_empty(&curproc->ptcb_list)) {
+        rlnode* node = rlist_pop_front(&curproc->ptcb_list);
+        PTCB* pt = node->ptcb;
+        free(pt);
+    }
 
-  /* Now, mark the process as exited. */
-  curproc->pstate = ZOMBIE;
+    // 9️⃣ Αποσύνδεσε το main_thread
+    curproc->main_thread = NULL;
 
-  /* Bye-bye cruel world */
-  kernel_sleep(EXITED, SCHED_USER);
+    // 🔟 Δήλωσε ότι η διεργασία τερμάτισε
+    curproc->pstate = ZOMBIE;
+
+    // 1️⃣1️⃣ Κοιμήσου μέχρι να σε “μαζέψει” ο parent (WaitChild)
+    kernel_sleep(EXITED, SCHED_USER);
 }
-
 
 
 Fid_t sys_OpenInfo()

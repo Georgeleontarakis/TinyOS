@@ -105,7 +105,41 @@ int sys_ThreadJoin(Tid_t tid, int* exitval)
   */
 int sys_ThreadDetach(Tid_t tid)
 {
-	return -1;
+
+    if (tid == 0)
+        return -1;
+
+
+
+    PTCB* target = (PTCB*)tid;    // Μετατροπή του thread ID σε pointer
+    if (!target)
+        return -1;
+
+    // Δεν μπορείς να κάνεις detach τον εαυτό σου (προαιρετικός έλεγχος)
+    if (target == CURTHREAD->ptcb)
+        return -1;
+
+    // Αν είναι ήδη detached -> αποτυχία
+    if (target->detached)
+        return -1;
+
+    // Μαρκάρουμε ότι είναι detached
+    target->detached = 1;
+
+    // Αν έχει ήδη τελειώσει (exited == 1), τότε κανείς δεν θα το περιμένει
+    // οπότε μπορούμε να το καθαρίσουμε τώρα.
+    if (target->exited) {
+        target->refcount--;
+        if (target->refcount == 0)
+            free(target);
+    }
+    else {
+        // Διαφορετικά, μειώνουμε το refcount κατά 1 γιατί δεν θα γίνει join
+        target->refcount--;
+    }
+
+    return 0;
+  
 }
 
 /**
@@ -113,6 +147,38 @@ int sys_ThreadDetach(Tid_t tid)
   */
 void sys_ThreadExit(int exitval)
 {
+// Πάρε το τρέχον PTCB
+    PTCB* pt = CURTHREAD->ptcb;
 
+    // Αν κάτι πάει στραβά (ποτέ δεν πρέπει)
+    if (!pt)
+        sched_finish_thread();
+
+    // Αποθήκευση της τιμής εξόδου
+    pt->exitval = exitval;
+    pt->exited  = 1;
+
+    // Αν είναι joinable (όχι detached) -> ξύπνα όσους περιμένουν
+    if (!pt->detached) {
+        cond_broadcast(&pt->exit_cv);
+    } else {
+        // Detached thread -> δεν το περιμένει κανείς, μπορεί να καθαριστεί άμεσα
+        pt->refcount--;
+        if (pt->refcount == 0)
+            free(pt);
+    }
+
+    // Ενημέρωσε το PCB: ένα thread λιγότερο
+    PCB* pcb = CURPROC;
+    if (pcb) {
+        pcb->thread_count--;
+        // Αν δεν έχει απομείνει κανένα thread, η διεργασία τελειώνει
+        if (pcb->thread_count == 0)
+            sys_Exit(pt->exitval);
+    }
+
+    // Τερμάτισε το τρέχον kernel thread (TCB)
+    sched_finish_thread();
+  
 }
 
