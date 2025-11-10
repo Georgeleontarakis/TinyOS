@@ -166,6 +166,7 @@ TCB* spawn_thread(PCB* pcb,PTCB* ptcb, void (*func)())
 	tcb->phase = CTX_CLEAN;
 	tcb->thread_func = func;
 	tcb->wakeup_time = NO_TIMEOUT;
+	tcb->priority = PQ - 1; // New: Start new threads at lowest priority 
 	rlnode_init(&tcb->sched_node, tcb); /* Intrusive list node */
 
 	tcb->its = QUANTUM;
@@ -227,7 +228,7 @@ void release_TCB(TCB* tcb)
   Both of these structures are protected by @c sched_spinlock.
 */
 
-rlnode SCHED; /* The scheduler queue */
+rlnode SCHED[PQ]; /* The scheduler queue */ // NEW
 rlnode TIMEOUT_LIST; /* The list of threads with a timeout */
 Mutex sched_spinlock = MUTEX_INIT; /* spinlock for scheduler queue */
 
@@ -272,9 +273,11 @@ static void sched_queue_add(TCB* tcb)
 	///// Implementation of MLFQ
 	///// must change rlist_push_back to handle multiple ques
 	///// rlist_push_back(&SCHED[TCB->priority])
-
+	int p= tcb->priority;
+	if (p < 0) p = 0;
+	if(p >= PQ) p = PQ - 1;
 	/* Insert at the end of the scheduling list */
-	rlist_push_back(&SCHED, &tcb->sched_node);
+	rlist_push_back(&SCHED[p], &tcb->sched_node);
 
 	/* Restart possibly halted cores */
 	cpu_core_restart_one();
@@ -333,9 +336,19 @@ static void sched_wakeup_expired_timeouts()
 static TCB* sched_queue_select(TCB* current)
 {
 	/* Get the head of the SCHED list */
-	rlnode* sel = rlist_pop_front(&SCHED);
+	//rlnode* sel = rlist_pop_front(&SCHED);
+////////////new new new new new new
+	rlnode* sel = NULL;
+	TCB* next_thread = NULL;
 
-	TCB* next_thread = sel->tcb; /* When the list is empty, this is NULL */
+	for(int i = PQ - 1; i >= 0; i--){
+		if(!is_rlist_empty(&SCHED[i])){
+			sel = rlist_pop_front(&SCHED[i]);
+			next_thread = sel->tcb;
+			break;
+		}
+	}
+/////////// new new new new new new 
 
 	if (next_thread == NULL)
 		next_thread = (current->state == READY) ? current : &CURCORE.idle_thread;
@@ -344,6 +357,29 @@ static TCB* sched_queue_select(TCB* current)
 
 	return next_thread;
 }
+
+/// new new new new new new
+int N = 0;
+void priority_boost()
+{
+    rlnode* list;
+    rlnode* node;
+
+    for (int i = 1; i < PQ; i++) {   // move all lower queues upward
+        list = &SCHED[i];
+        while (!is_rlist_empty(list)) {
+            node = rlist_pop_front(list);
+            TCB* t = node->tcb;
+            if (t->priority > 0)
+                t->priority--;
+            rlist_push_back(&SCHED[t->priority], node);
+        }
+    }
+
+    N = 0;
+
+}
+
 
 /*
   Make the process ready.
@@ -408,6 +444,7 @@ void sleep_releasing(Thread_state state, Mutex* mx, enum SCHED_CAUSE cause,
 }
 
 /* This function is the entry point to the scheduler's context switching */
+/// Lowest value for priority = higher priority
 
 void yield(enum SCHED_CAUSE cause)
 {
@@ -430,28 +467,69 @@ void yield(enum SCHED_CAUSE cause)
 	current->last_cause = current->curr_cause;
 	current->curr_cause = cause;
 
-	/* Wake up threads whose sleep timeout has expired */
-	sched_wakeup_expired_timeouts();
+	// new new new new new
 
-	/* Get next */
-	TCB* next = sched_queue_select(current);
-	assert(next != NULL);
+	switch(cause)
+        {
+            case SCHED_QUANTUM :
+                            if(current->priority>0)
+                            current->priority--;
+                            break;
+        
+            case SCHED_IO      : 
+                            if(current->priority < PQ-1)
+                            current->priority++;
+                            break;
+            case SCHED_MUTEX   :
+                             if(current->last_cause == SCHED_MUTEX && current->priority>0)
+                             current->priority--;
+                             break;
+            default:
+                break;
 
-	/* Save the current TCB for the gain phase */
-	CURCORE.previous_thread = current;
+    }
 
-	Mutex_Unlock(&sched_spinlock);
+    /* Wake up threads whose sleep timeout has expired */
+    sched_wakeup_expired_timeouts();
 
-	/* Switch contexts */
-	if (current != next) {
-		CURTHREAD = next;
-		cpu_swap_context(&current->context, &next->context);
+    N++;
+    if(N==5000)    //enough for fibo(40) to run
+        priority_boost();
+
+
+	if (current->priority < 0){
+		current->priority = 0;
 	}
 
-	/* This is where we get after we are switched back on! A long time
-	   may have passed. Start a new timeslice...
-	  */
-	gain(preempt);
+	if (current->priority >= PQ){
+		current->priority = PQ - 1;
+	}
+
+
+
+    /* Get next */
+    TCB* next = sched_queue_select(current);
+    assert(next != NULL);
+
+
+    /* Save the current TCB for the gain phase */
+    CURCORE.previous_thread = current;
+
+
+    Mutex_Unlock(&sched_spinlock);
+
+    /* Switch contexts */
+    if (current != next) {
+        CURTHREAD = next;
+        cpu_swap_context(&current->context, &next->context);
+    }
+
+
+    /* This is where we get after we are switched back on! A long time
+       may have passed. Start a new timeslice...
+      */
+    gain(preempt);
+
 }
 
 /*
@@ -527,7 +605,9 @@ static void idle_thread()
  */
 void initialize_scheduler()
 {
-	rlnode_init(&SCHED, NULL);
+	for(int i=0; i < PQ; i++){
+		rlnode_init(&SCHED[i], NULL);
+	}
 	rlnode_init(&TIMEOUT_LIST, NULL);
 }
 
