@@ -17,6 +17,7 @@
 
 #include "tinyos.h"
 #include "kernel_sched.h"
+#include "kernel_thread.h"
 
 
 

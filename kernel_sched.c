@@ -6,6 +6,7 @@
 #include "kernel_proc.h"
 #include "kernel_sched.h"
 #include "tinyos.h"
+#include "kernel_thread.h"
 
 #ifndef NVALGRIND
 #include <valgrind/valgrind.h>
@@ -159,54 +160,6 @@ TCB* spawn_thread(PCB* pcb,PTCB* ptcb, void (*func)())
 	tcb->owner_pcb = pcb;
 	tcb->ptcb = ptcb; //NEW NEW NEW NEW NEW
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-	
 
 	/* Initialize the other attributes */
 	tcb->type = NORMAL_THREAD;

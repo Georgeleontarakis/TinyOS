@@ -104,6 +104,9 @@ int sys_ThreadDetach(Tid_t tid)
   
 }
 
+/**
+  @brief Terminate the current thread.
+  */
 void sys_ThreadExit(int exitval)
 {
 
