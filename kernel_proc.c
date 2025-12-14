@@ -353,9 +353,92 @@ void sys_Exit(int exitval)
   sys_ThreadExit(exitval);
 }
 
+int procinfo_read(void* _procinfo_cb, char* buf, unsigned int size){
+
+  procinfo_cb* procinfocb = (procinfo_cb*)_procinfo_cb;
+
+  while(procinfocb->PCB_cursor < MAX_PROC &&
+    PT[procinfocb->PCB_cursor].pstate == FREE){
+
+      procinfocb->PCB_cursor++;
+
+  }
+  if(procinfocb->PCB_cursor==MAX_PROC) return 0;
+
+  PCB* pcb = &PT[procinfocb->PCB_cursor];
+
+  procinfocb->info.alive = (pcb->pstate == ALIVE) ? 1 : 0;
+  procinfocb->info.argl = pcb->argl;
+
+  int i;
+  if(pcb->args!=NULL){
+    char* cargs = (char *)pcb->args;
+    for(i=0;i<size;i++){
+      if(i==PROCINFO_MAX_ARGS_SIZE) break;
+      procinfocb->info.args[i] = cargs[i];
+    
+    }
+  }
+
+  procinfocb->info.main_task = pcb->main_task;
+  procinfocb->info.pid = get_pid(pcb);
+  
+  PCB* parent_pcb = pcb->parent;
+  if(procinfocb->info.pid!=1)
+    procinfocb->info.ppid = get_pid(parent_pcb);
+
+  procinfocb->info.thread_count = pcb->thread_count;
+
+  memcpy(buf, (char*)&procinfocb->info, sizeof(procinfo));
+
+  procinfocb->PCB_cursor++;
+  return 1;
+}
+
+
+int procinfo_close(void* _procinfo_cb){
+
+  procinfo_cb* procinfocb = (procinfo_cb*)_procinfo_cb;
+  free(procinfocb);
+
+  return 0;
+}
+
+
+file_ops procinfo_ops = {
+  .Open = do_nothing_pt,
+  .Read = procinfo_read,
+  .Write = do_nothing,
+  .Close = procinfo_close
+};
+
+procinfo_cb* initialize_procinfo_cb(){
+
+  procinfo_cb* procinfocb = (procinfo_cb*)xmalloc(sizeof(procinfo_cb));
+  procinfocb->PCB_cursor=1;
+  procinfocb->fcb = NULL;
+  procinfocb->refcount = 0;
+  return procinfocb;
+}
 
 Fid_t sys_OpenInfo()
 {
-	return NOFILE;
+  Fid_t fid;
+  FCB* fcb;
+
+  if(!FCB_reserve(1, &fid, &fcb)) return NOFILE;
+
+  procinfo_cb* procinfocb = initialize_procinfo_cb();
+
+  fcb->streamfunc = &procinfo_ops;
+  fcb->streamobj = procinfocb;
+
+  procinfocb->fcb = fcb;
+ 
+
+
+  return fid;
 }
+
+
 
